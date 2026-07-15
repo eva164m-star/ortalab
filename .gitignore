@@ -3,3 +3,4 @@ target/
 *.zip
 *.tar
 *.tar.gz
+src_stage1_backup/
