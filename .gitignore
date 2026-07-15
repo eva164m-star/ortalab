@@ -1,0 +1,5 @@
+target/
+.idea/
+*.zip
+*.tar
+*.tar.gz
