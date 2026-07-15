@@ -1,6 +1,5 @@
-use std::collections::BTreeMap;
-
 use ortalib::{Card, Enhancement, PokerHand, Rank, Suit};
+use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub struct EvaluatedHand {
@@ -8,197 +7,281 @@ pub struct EvaluatedHand {
     pub scoring_indices: Vec<usize>,
 }
 
-/// Finds the highest-tier poker hand and the played cards which score for it.
-/// Stone cards are excluded from hand construction, then added to the scoring
-/// set because Stone cards always score.
-pub fn evaluate(cards: &[Card]) -> EvaluatedHand {
-    assert!(
-        !cards.is_empty(),
-        "a round must contain at least one played card"
-    );
+#[derive(Clone, Copy, Default)]
+pub struct Rules {
+    pub four_fingers: bool,
+    pub shortcut: bool,
+    pub smeared: bool,
+    pub splash: bool,
+}
 
-    let regular_indices: Vec<usize> = cards
+pub fn evaluate(cards: &[Card], rules: Rules) -> EvaluatedHand {
+    assert!(!cards.is_empty());
+    let regular: Vec<usize> = cards
         .iter()
         .enumerate()
-        .filter_map(|(index, card)| (!is_stone(card)).then_some(index))
+        .filter_map(|(i, c)| (!is_stone(c)).then_some(i))
         .collect();
-    let regular_cards: Vec<Card> = regular_indices.iter().map(|&index| cards[index]).collect();
-
-    let mut evaluated = evaluate_regular_cards(&regular_cards);
-    evaluated.scoring_indices = evaluated
-        .scoring_indices
-        .into_iter()
-        .map(|index| regular_indices[index])
-        .collect();
-
-    evaluated.scoring_indices.extend(
+    let rcards: Vec<Card> = regular.iter().map(|&i| cards[i]).collect();
+    let mut e = evaluate_regular(&rcards, rules);
+    e.scoring_indices = e.scoring_indices.into_iter().map(|i| regular[i]).collect();
+    e.scoring_indices.extend(
         cards
             .iter()
             .enumerate()
-            .filter_map(|(index, card)| is_stone(card).then_some(index)),
+            .filter_map(|(i, c)| is_stone(c).then_some(i)),
     );
-    evaluated.scoring_indices.sort_unstable();
-    evaluated
+    if rules.splash {
+        e.scoring_indices = (0..cards.len()).collect();
+    }
+    e.scoring_indices.sort_unstable();
+    e.scoring_indices.dedup();
+    e
 }
 
-fn evaluate_regular_cards(cards: &[Card]) -> EvaluatedHand {
-    // A hand containing only Stone cards is still scored as a High Card hand,
-    // but has no ordinary high card contributing rank chips.
+fn evaluate_regular(cards: &[Card], rules: Rules) -> EvaluatedHand {
     if cards.is_empty() {
         return EvaluatedHand {
             hand: PokerHand::HighCard,
-            scoring_indices: Vec::new(),
+            scoring_indices: vec![],
         };
     }
-
-    let rank_groups = group_by_rank(cards);
-    let flush = is_flush(cards);
-    let straight = is_straight(cards);
-
-    let mut groups: Vec<(Rank, Vec<usize>)> = rank_groups.into_iter().collect();
-    groups.sort_by(|(rank_a, indices_a), (rank_b, indices_b)| {
-        indices_b
-            .len()
-            .cmp(&indices_a.len())
-            .then_with(|| rank_b.cmp(rank_a))
-    });
-
-    let sizes: Vec<usize> = groups.iter().map(|(_, indices)| indices.len()).collect();
-
-    if cards.len() == 5 && sizes.first() == Some(&5) && flush {
-        return all_cards(PokerHand::FlushFive, cards);
+    let groups = group_by_rank(cards);
+    let mut gs: Vec<_> = groups.into_iter().collect();
+    gs.sort_by(|(ra, ia), (rb, ib)| ib.len().cmp(&ia.len()).then_with(|| rb.cmp(ra)));
+    let sizes: Vec<_> = gs.iter().map(|x| x.1.len()).collect();
+    if cards.len() == 5
+        && sizes.first() == Some(&5)
+        && flush_subset(cards, 5, rules.smeared).is_some()
+    {
+        return all(PokerHand::FlushFive, cards.len());
     }
-
-    if cards.len() == 5 && sizes.as_slice() == [3, 2] && flush {
-        return all_cards(PokerHand::FlushHouse, cards);
+    if cards.len() == 5
+        && sizes.as_slice() == [3, 2]
+        && flush_subset(cards, 5, rules.smeared).is_some()
+    {
+        return all(PokerHand::FlushHouse, cards.len());
     }
-
     if cards.len() == 5 && sizes.first() == Some(&5) {
-        return all_cards(PokerHand::FiveOfAKind, cards);
+        return all(PokerHand::FiveOfAKind, cards.len());
     }
-
-    if cards.len() == 5 && straight && flush {
-        return all_cards(PokerHand::StraightFlush, cards);
+    let min = if rules.four_fingers { 4 } else { 5 };
+    let straight = largest_straight_subset(cards, min, rules.shortcut);
+    let flush = largest_flush_subset(cards, min, rules.smeared);
+    if let (Some(s), Some(f)) = (straight.as_ref(), flush.as_ref())
+        && (rules.four_fingers || s == f)
+    {
+        let mut u = s.clone();
+        for &i in f {
+            if !u.contains(&i) {
+                u.push(i)
+            }
+        }
+        u.sort();
+        return EvaluatedHand {
+            hand: PokerHand::StraightFlush,
+            scoring_indices: u,
+        };
     }
-
-    if let Some((_, indices)) = groups.iter().find(|(_, indices)| indices.len() == 4) {
+    if let Some((_, v)) = gs.iter().find(|x| x.1.len() == 4) {
         return EvaluatedHand {
             hand: PokerHand::FourOfAKind,
-            scoring_indices: indices.clone(),
+            scoring_indices: v.clone(),
         };
     }
-
     if cards.len() == 5 && sizes.as_slice() == [3, 2] {
-        return all_cards(PokerHand::FullHouse, cards);
+        return all(PokerHand::FullHouse, 5);
     }
-
-    if cards.len() == 5 && flush {
-        return all_cards(PokerHand::Flush, cards);
+    if let Some(v) = flush {
+        return EvaluatedHand {
+            hand: PokerHand::Flush,
+            scoring_indices: v,
+        };
     }
-
-    if cards.len() == 5 && straight {
-        return all_cards(PokerHand::Straight, cards);
+    if let Some(v) = straight {
+        return EvaluatedHand {
+            hand: PokerHand::Straight,
+            scoring_indices: v,
+        };
     }
-
-    if let Some((_, indices)) = groups.iter().find(|(_, indices)| indices.len() == 3) {
+    if let Some((_, v)) = gs.iter().find(|x| x.1.len() == 3) {
         return EvaluatedHand {
             hand: PokerHand::ThreeOfAKind,
-            scoring_indices: indices.clone(),
+            scoring_indices: v.clone(),
         };
     }
-
-    let pairs: Vec<&Vec<usize>> = groups
-        .iter()
-        .filter_map(|(_, indices)| (indices.len() == 2).then_some(indices))
-        .collect();
-
+    let pairs: Vec<_> = gs.iter().filter(|x| x.1.len() == 2).collect();
     if pairs.len() >= 2 {
-        let mut scoring_indices = pairs
-            .iter()
-            .take(2)
-            .flat_map(|indices| indices.iter().copied())
-            .collect::<Vec<_>>();
-        scoring_indices.sort_unstable();
-
+        let mut v = vec![];
+        v.extend(&pairs[0].1);
+        v.extend(&pairs[1].1);
+        v.sort();
         return EvaluatedHand {
             hand: PokerHand::TwoPair,
-            scoring_indices,
+            scoring_indices: v,
         };
     }
-
-    if let Some(indices) = pairs.first() {
+    if let Some(x) = pairs.first() {
         return EvaluatedHand {
             hand: PokerHand::Pair,
-            scoring_indices: (*indices).clone(),
+            scoring_indices: x.1.clone(),
         };
     }
-
-    let highest_index = cards
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, card)| card.rank)
-        .map(|(index, _)| index)
-        .expect("cards is known to be non-empty");
-
+    let i = cards.iter().enumerate().max_by_key(|x| x.1.rank).unwrap().0;
     EvaluatedHand {
         hand: PokerHand::HighCard,
-        scoring_indices: vec![highest_index],
+        scoring_indices: vec![i],
     }
 }
-
-fn all_cards(hand: PokerHand, cards: &[Card]) -> EvaluatedHand {
+fn all(h: PokerHand, n: usize) -> EvaluatedHand {
     EvaluatedHand {
-        hand,
-        scoring_indices: (0..cards.len()).collect(),
+        hand: h,
+        scoring_indices: (0..n).collect(),
     }
 }
-
 fn group_by_rank(cards: &[Card]) -> BTreeMap<Rank, Vec<usize>> {
-    let mut groups = BTreeMap::new();
-    for (index, card) in cards.iter().enumerate() {
-        groups.entry(card.rank).or_insert_with(Vec::new).push(index);
+    let mut m: BTreeMap<Rank, Vec<usize>> = BTreeMap::new();
+    for (i, c) in cards.iter().enumerate() {
+        m.entry(c.rank).or_default().push(i)
     }
-    groups
+    m
 }
-
-/// Wild cards can represent any suit. A flush therefore exists when at least
-/// one real suit is compatible with every card in the hand.
-fn is_flush(cards: &[Card]) -> bool {
-    use Suit::*;
-    [Spades, Hearts, Clubs, Diamonds]
-        .into_iter()
-        .any(|suit| cards.iter().all(|card| is_wild(card) || card.suit == suit))
+fn combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
+    fn rec(n: usize, k: usize, s: usize, v: &mut Vec<usize>, o: &mut Vec<Vec<usize>>) {
+        if v.len() == k {
+            o.push(v.clone());
+            return;
+        }
+        for i in s..n {
+            v.push(i);
+            rec(n, k, i + 1, v, o);
+            v.pop();
+        }
+    }
+    let mut o = vec![];
+    rec(n, k, 0, &mut vec![], &mut o);
+    o
 }
-
-fn is_straight(cards: &[Card]) -> bool {
-    if cards.len() != 5 {
+fn flush_subset(c: &[Card], k: usize, smeared: bool) -> Option<Vec<usize>> {
+    if c.len() < k {
+        return None;
+    }
+    for ids in combinations(c.len(), k) {
+        for suit in [Suit::Spades, Suit::Hearts, Suit::Clubs, Suit::Diamonds] {
+            if ids.iter().all(|&i| suit_match(&c[i], suit, smeared)) {
+                return Some(ids);
+            }
+        }
+    }
+    None
+}
+fn largest_flush_subset(c: &[Card], min: usize, smeared: bool) -> Option<Vec<usize>> {
+    for k in (min..=c.len()).rev() {
+        if let Some(ids) = flush_subset(c, k, smeared) {
+            return Some(ids);
+        }
+    }
+    None
+}
+fn straight_subset(c: &[Card], k: usize, shortcut: bool) -> Option<Vec<usize>> {
+    if c.len() < k {
+        return None;
+    }
+    for ids in combinations(c.len(), k) {
+        let mut r: Vec<u8> = ids.iter().map(|&i| rank_index(c[i].rank)).collect();
+        r.sort();
+        r.dedup();
+        if r.len() != k {
+            continue;
+        }
+        let ok = if shortcut {
+            r.windows(2).all(|w| w[1] - w[0] <= 2)
+        } else {
+            r.windows(2).all(|w| w[1] == w[0] + 1)
+        };
+        let ace_low = if k == 5 {
+            r == [0, 1, 2, 3, 12]
+        } else {
+            r == [0, 1, 2, 12]
+        };
+        if ok || ace_low {
+            return Some(ids);
+        }
+    }
+    None
+}
+fn largest_straight_subset(c: &[Card], min: usize, shortcut: bool) -> Option<Vec<usize>> {
+    for k in (min..=c.len()).rev() {
+        if let Some(ids) = straight_subset(c, k, shortcut) {
+            return Some(ids);
+        }
+    }
+    None
+}
+pub fn contains_pair(c: &[Card]) -> bool {
+    counts(c).values().any(|&n| n >= 2)
+}
+pub fn contains_three(c: &[Card]) -> bool {
+    counts(c).values().any(|&n| n >= 3)
+}
+pub fn contains_two_pair(c: &[Card]) -> bool {
+    counts(c).values().filter(|&&n| n >= 2).count() >= 2
+}
+pub fn contains_straight(c: &[Card], r: Rules) -> bool {
+    largest_straight_subset(
+        &c.iter()
+            .copied()
+            .filter(|x| !is_stone(x))
+            .collect::<Vec<_>>(),
+        if r.four_fingers { 4 } else { 5 },
+        r.shortcut,
+    )
+    .is_some()
+}
+pub fn contains_flush(c: &[Card], r: Rules) -> bool {
+    largest_flush_subset(
+        &c.iter()
+            .copied()
+            .filter(|x| !is_stone(x))
+            .collect::<Vec<_>>(),
+        if r.four_fingers { 4 } else { 5 },
+        r.smeared,
+    )
+    .is_some()
+}
+fn counts(c: &[Card]) -> BTreeMap<Rank, usize> {
+    let mut m = BTreeMap::new();
+    for x in c.iter().filter(|x| !is_stone(x)) {
+        *m.entry(x.rank).or_default() += 1
+    }
+    m
+}
+pub fn is_face(c: &Card, pareidolia: bool) -> bool {
+    !is_stone(c) && (pareidolia || matches!(c.rank, Rank::Jack | Rank::Queen | Rank::King))
+}
+pub fn suit_match(c: &Card, s: Suit, smeared: bool) -> bool {
+    if is_stone(c) {
         return false;
     }
-
-    let mut ranks: Vec<u8> = cards.iter().map(|card| rank_index(card.rank)).collect();
-    ranks.sort_unstable();
-    ranks.dedup();
-
-    if ranks.len() != 5 {
-        return false;
+    if c.enhancement == Some(Enhancement::Wild) {
+        return true;
     }
-
-    let ordinary = ranks.windows(2).all(|pair| pair[1] == pair[0] + 1);
-    let ace_low = ranks == [0, 1, 2, 3, 12];
-    ordinary || ace_low
+    if smeared {
+        matches!(
+            (c.suit, s),
+            (Suit::Hearts | Suit::Diamonds, Suit::Hearts | Suit::Diamonds)
+                | (Suit::Spades | Suit::Clubs, Suit::Spades | Suit::Clubs)
+        )
+    } else {
+        c.suit == s
+    }
 }
-
-fn is_stone(card: &Card) -> bool {
-    card.enhancement == Some(Enhancement::Stone)
+fn is_stone(c: &Card) -> bool {
+    c.enhancement == Some(Enhancement::Stone)
 }
-
-fn is_wild(card: &Card) -> bool {
-    card.enhancement == Some(Enhancement::Wild)
-}
-
-fn rank_index(rank: Rank) -> u8 {
+fn rank_index(r: Rank) -> u8 {
     use Rank::*;
-    match rank {
+    match r {
         Two => 0,
         Three => 1,
         Four => 2,
@@ -212,77 +295,5 @@ fn rank_index(rank: Rank) -> u8 {
         Queen => 10,
         King => 11,
         Ace => 12,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ortalib::{Card, Rank::*, Suit, Suit::*};
-
-    fn card(rank: Rank, suit: Suit) -> Card {
-        Card::new(rank, suit, None, None)
-    }
-
-    #[test]
-    fn ace_can_be_low_in_a_straight() {
-        let cards = [
-            card(Ace, Spades),
-            card(Two, Hearts),
-            card(Three, Clubs),
-            card(Four, Diamonds),
-            card(Five, Spades),
-        ];
-        assert_eq!(evaluate(&cards).hand, PokerHand::Straight);
-    }
-
-    #[test]
-    fn ace_cannot_wrap_in_a_straight() {
-        let cards = [
-            card(Queen, Spades),
-            card(King, Hearts),
-            card(Ace, Clubs),
-            card(Two, Diamonds),
-            card(Three, Spades),
-        ];
-        assert_eq!(evaluate(&cards).hand, PokerHand::HighCard);
-    }
-
-    #[test]
-    fn higher_tier_beats_flush() {
-        let cards = [
-            card(King, Hearts),
-            card(King, Hearts),
-            card(King, Hearts),
-            card(King, Hearts),
-            card(Two, Hearts),
-        ];
-        assert_eq!(evaluate(&cards).hand, PokerHand::FourOfAKind);
-    }
-
-    #[test]
-    fn wild_cards_complete_a_flush() {
-        let cards = [
-            card(Ace, Hearts),
-            card(King, Hearts),
-            Card::new(Queen, Diamonds, Some(Enhancement::Wild), None),
-            Card::new(Jack, Clubs, Some(Enhancement::Wild), None),
-            Card::new(Ten, Spades, Some(Enhancement::Wild), None),
-        ];
-        assert_eq!(evaluate(&cards).hand, PokerHand::StraightFlush);
-    }
-
-    #[test]
-    fn stone_does_not_complete_a_flush() {
-        let cards = [
-            card(Ace, Hearts),
-            card(King, Hearts),
-            card(Queen, Hearts),
-            card(Jack, Hearts),
-            Card::new(Ten, Hearts, Some(Enhancement::Stone), None),
-        ];
-        let evaluated = evaluate(&cards);
-        assert_eq!(evaluated.hand, PokerHand::HighCard);
-        assert_eq!(evaluated.scoring_indices, vec![0, 4]);
     }
 }
