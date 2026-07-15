@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use ortalib::{Card, PokerHand, Rank};
+use ortalib::{Card, Enhancement, PokerHand, Rank, Suit};
 
 #[derive(Debug)]
 pub struct EvaluatedHand {
@@ -8,11 +8,48 @@ pub struct EvaluatedHand {
     pub scoring_indices: Vec<usize>,
 }
 
+/// Finds the highest-tier poker hand and the played cards which score for it.
+/// Stone cards are excluded from hand construction, then added to the scoring
+/// set because Stone cards always score.
 pub fn evaluate(cards: &[Card]) -> EvaluatedHand {
     assert!(
         !cards.is_empty(),
         "a round must contain at least one played card"
     );
+
+    let regular_indices: Vec<usize> = cards
+        .iter()
+        .enumerate()
+        .filter_map(|(index, card)| (!is_stone(card)).then_some(index))
+        .collect();
+    let regular_cards: Vec<Card> = regular_indices.iter().map(|&index| cards[index]).collect();
+
+    let mut evaluated = evaluate_regular_cards(&regular_cards);
+    evaluated.scoring_indices = evaluated
+        .scoring_indices
+        .into_iter()
+        .map(|index| regular_indices[index])
+        .collect();
+
+    evaluated.scoring_indices.extend(
+        cards
+            .iter()
+            .enumerate()
+            .filter_map(|(index, card)| is_stone(card).then_some(index)),
+    );
+    evaluated.scoring_indices.sort_unstable();
+    evaluated
+}
+
+fn evaluate_regular_cards(cards: &[Card]) -> EvaluatedHand {
+    // A hand containing only Stone cards is still scored as a High Card hand,
+    // but has no ordinary high card contributing rank chips.
+    if cards.is_empty() {
+        return EvaluatedHand {
+            hand: PokerHand::HighCard,
+            scoring_indices: Vec::new(),
+        };
+    }
 
     let rank_groups = group_by_rank(cards);
     let flush = is_flush(cards);
@@ -124,11 +161,13 @@ fn group_by_rank(cards: &[Card]) -> BTreeMap<Rank, Vec<usize>> {
     groups
 }
 
+/// Wild cards can represent any suit. A flush therefore exists when at least
+/// one real suit is compatible with every card in the hand.
 fn is_flush(cards: &[Card]) -> bool {
-    let Some(first) = cards.first() else {
-        return false;
-    };
-    cards.iter().all(|card| card.suit == first.suit)
+    use Suit::*;
+    [Spades, Hearts, Clubs, Diamonds]
+        .into_iter()
+        .any(|suit| cards.iter().all(|card| is_wild(card) || card.suit == suit))
 }
 
 fn is_straight(cards: &[Card]) -> bool {
@@ -147,6 +186,14 @@ fn is_straight(cards: &[Card]) -> bool {
     let ordinary = ranks.windows(2).all(|pair| pair[1] == pair[0] + 1);
     let ace_low = ranks == [0, 1, 2, 3, 12];
     ordinary || ace_low
+}
+
+fn is_stone(card: &Card) -> bool {
+    card.enhancement == Some(Enhancement::Stone)
+}
+
+fn is_wild(card: &Card) -> bool {
+    card.enhancement == Some(Enhancement::Wild)
 }
 
 fn rank_index(rank: Rank) -> u8 {
@@ -211,5 +258,31 @@ mod tests {
             card(Two, Hearts),
         ];
         assert_eq!(evaluate(&cards).hand, PokerHand::FourOfAKind);
+    }
+
+    #[test]
+    fn wild_cards_complete_a_flush() {
+        let cards = [
+            card(Ace, Hearts),
+            card(King, Hearts),
+            Card::new(Queen, Diamonds, Some(Enhancement::Wild), None),
+            Card::new(Jack, Clubs, Some(Enhancement::Wild), None),
+            Card::new(Ten, Spades, Some(Enhancement::Wild), None),
+        ];
+        assert_eq!(evaluate(&cards).hand, PokerHand::StraightFlush);
+    }
+
+    #[test]
+    fn stone_does_not_complete_a_flush() {
+        let cards = [
+            card(Ace, Hearts),
+            card(King, Hearts),
+            card(Queen, Hearts),
+            card(Jack, Hearts),
+            Card::new(Ten, Hearts, Some(Enhancement::Stone), None),
+        ];
+        let evaluated = evaluate(&cards);
+        assert_eq!(evaluated.hand, PokerHand::HighCard);
+        assert_eq!(evaluated.scoring_indices, vec![0, 4]);
     }
 }
