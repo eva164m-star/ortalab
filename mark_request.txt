@@ -6,11 +6,11 @@ Please mark stages that are complete with an [X].
 Stages that are partially complete should be marked with a [?].
 Stages that are not complete should be left blank (like [ ]).
 
-> [ ] Stage 1 (Basic Scoring)
-> [ ] Stage 2 (Modifiers)
-> [ ] Stage 3 (Easy Jokers)
-> [ ] Stage 4 (Medium Jokers)
-> [ ] Stage 5 (Hard Jokers)
+> [X] Stage 1 (Basic Scoring)
+> [X] Stage 2 (Modifiers)
+> [X] Stage 3 (Easy Jokers)
+> [X] Stage 4 (Medium Jokers)
+> [X] Stage 5 (Hard Jokers)
 
 ## Design Excellence
 
@@ -18,14 +18,12 @@ If you have completed a "design excellence" task, please write what
 the task was below (note, it MUST be on the list in the assignment or
 approved by COMP6991 staff).
 
->
+> Terminal UI for Ortalab and an additional Rust regression test suite.
 
-Please write a paragraph or two (max. 250 words) describing how your design was
-influenced by this challenge, with specific reference to sections of your code.
+Please write a paragraph or two (max. 250 words) describing how your design was influenced by this challenge, with specific reference to sections of your code.
 
->
->
->
+> I implemented a simple terminal user interface for Ortalab while keeping the original command-line interface fully compatible. The UI was implemented as a separate module (src/ui.rs), allowing the scoring engine to remain independent from user interaction.
+> I also added an additional Rust regression test suite covering representative poker hands, card enhancements and joker interactions. These tests provide an extra layer of regression testing alongside the supplied autotests and helped verify that later refactoring did not change the scoring behaviour.
 
 ## Design Limitations
 
@@ -33,18 +31,22 @@ If you made any design decisions which you now regret making; but don't to go ba
 let us know here. You can make up your design marks by acknowledging up to 5 things you would do
 differently now.
 
-> - TODO
+> I would further separate Joker behaviour into smaller components instead of grouping many effects in a few large functions.
+> I would redesign the scoring pipeline so that each scoring phase (played cards, held cards, independent Jokers and retriggers) is represented by its own abstraction rather than function calls.
+> The current terminal UI is intentionally lightweight. Given more time, I would provide richer feedback, such as displaying the detected poker hand and intermediate scoring steps.
+> My additional regression tests currently focus on representative game states. I would like to add more unit tests that construct game states directly in Rust to reduce reliance on fixture files.
+> I would reduce some remaining code duplication between Joker implementations by introducing reusable helper traits or dispatch tables.
 
 ## Questions to the marker
 
 If you want to let us know something else about your program, put it here!
 (Feel free to leave this blank)
 
-> TODO
+>
 
 ## Other Comments
 
 If you want to let us know something else about your program, put it here!
 (Feel free to leave this blank)
 
-> TODO
+>
