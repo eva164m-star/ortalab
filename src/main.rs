@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     fs::File,
-    io::{Read, stdin},
+    io::{self, Read, stdin},
     path::{Path, PathBuf},
 };
 
@@ -10,10 +10,17 @@ use ortalib::{Chips, Mult, Round};
 
 mod poker;
 mod scoring;
+mod ui;
 
 #[derive(Parser)]
+#[command(about = "Score an Ortalab round from YAML")]
 struct Opts {
-    file: PathBuf,
+    /// YAML input file. Use '-' to read from standard input.
+    file: Option<PathBuf>,
+
+    /// Start a small terminal menu instead of scoring one file.
+    #[arg(short, long)]
+    interactive: bool,
 
     #[arg(long)]
     explain: bool,
@@ -21,26 +28,36 @@ struct Opts {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let opts = Opts::parse();
-    let round = parse_round(&opts)?;
 
-    let (chips, mult) = score(round);
+    if opts.interactive {
+        return ui::run();
+    }
+
+    let file = opts.file.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing input file: provide a YAML path, '-' for stdin, or use --interactive",
+        )
+    })?;
+    let _ = opts.explain;
+    let round = parse_round(file)?;
+    let (chips, mult) = score(&round);
 
     println!("{}", (chips * mult).floor());
     Ok(())
 }
 
-fn parse_round(opts: &Opts) -> Result<Round, Box<dyn Error>> {
+fn parse_round(path: &Path) -> Result<Round, Box<dyn Error>> {
     let mut input = String::new();
-    if opts.file == Path::new("-") {
+    if path == Path::new("-") {
         stdin().read_to_string(&mut input)?;
     } else {
-        File::open(&opts.file)?.read_to_string(&mut input)?;
+        File::open(path)?.read_to_string(&mut input)?;
     }
 
-    let round = serde_yaml::from_str(&input)?;
-    Ok(round)
+    Ok(serde_yaml::from_str(&input)?)
 }
 
-fn score(round: Round) -> (Chips, Mult) {
-    scoring::score_round(&round)
+fn score(round: &Round) -> (Chips, Mult) {
+    scoring::score_round(round)
 }

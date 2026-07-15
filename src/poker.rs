@@ -68,20 +68,23 @@ fn evaluate_regular(cards: &[Card], rules: Rules) -> EvaluatedHand {
     let min = if rules.four_fingers { 4 } else { 5 };
     let straight = largest_straight_subset(cards, min, rules.shortcut);
     let flush = largest_flush_subset(cards, min, rules.smeared);
-    if let (Some(s), Some(f)) = (straight.as_ref(), flush.as_ref())
-        && (rules.four_fingers || s == f)
-    {
-        let mut u = s.clone();
-        for &i in f {
-            if !u.contains(&i) {
-                u.push(i)
+    match (straight.as_ref(), flush.as_ref()) {
+        (Some(straight_indices), Some(flush_indices))
+            if rules.four_fingers || straight_indices == flush_indices =>
+        {
+            let mut scoring_indices = straight_indices.clone();
+            for &index in flush_indices {
+                if !scoring_indices.contains(&index) {
+                    scoring_indices.push(index);
+                }
             }
+            scoring_indices.sort_unstable();
+            return EvaluatedHand {
+                hand: PokerHand::StraightFlush,
+                scoring_indices,
+            };
         }
-        u.sort();
-        return EvaluatedHand {
-            hand: PokerHand::StraightFlush,
-            scoring_indices: u,
-        };
+        _ => {}
     }
     if let Some((_, v)) = gs.iter().find(|x| x.1.len() == 4) {
         return EvaluatedHand {

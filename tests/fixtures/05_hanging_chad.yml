@@ -1,0 +1,11 @@
+cards_played:
+  - A♥
+  - A♠
+  - K♦
+  - Q♣
+  - J♥
+
+cards_held_in_hand: []
+
+jokers:
+  - Hanging Chad
