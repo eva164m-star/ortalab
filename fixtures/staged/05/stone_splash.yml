@@ -1,0 +1,11 @@
+cards_played:
+  - 2♥
+  - 5♠
+  - 8♦
+  - J♣ Stone
+  - K♥
+
+cards_held_in_hand: []
+
+jokers:
+  - Splash

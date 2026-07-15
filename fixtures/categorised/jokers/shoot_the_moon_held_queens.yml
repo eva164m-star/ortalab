@@ -1,0 +1,13 @@
+cards_played:
+  - A♥
+  - K♠
+  - J♦
+  - 10♣
+  - 9♥
+
+cards_held_in_hand:
+  - Q♠
+  - Q♦
+
+jokers:
+  - Shoot The Moon

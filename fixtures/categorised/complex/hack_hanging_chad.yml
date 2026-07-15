@@ -1,0 +1,12 @@
+cards_played:
+  - 5♥
+  - 5♠
+  - 4♦
+  - 3♣
+  - 2♥
+
+cards_held_in_hand: []
+
+jokers:
+  - Hack
+  - Hanging Chad
